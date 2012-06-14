@@ -48,31 +48,6 @@ class ModuleCreateNewUser extends Module
 	 */
 	public function generate()
 	{
-	
-		if (TL_MODE == 'BE')
-		{
-			$objTemplate = new BackendTemplate('be_wildcard');
-
-			$objTemplate->wildcard = '### CREATE NEW USER ###';
-			$objTemplate->title = $this->headline;
-			$objTemplate->id = $this->id;
-			$objTemplate->link = $this->name;
-			$objTemplate->href = 'contao/main.php?do=themes&amp;table=tl_module&amp;act=edit&amp;id=' . $this->id;
-
-			return $objTemplate->parse();
-		}	
-
-		$this->editable = deserialize($this->editable);
-
-		// Return if there are no editable fields
-		if (!is_array($this->editable) || empty($this->editable))
-		{
-			return '';
-		}
-
-		return parent::generate();
-	}
-
 
 	/**
 	 * Generate the module
@@ -97,13 +72,6 @@ class ModuleCreateNewUser extends Module
 					$this->$callback[0]->$callback[1]();
 				}
 			}
-		}
-
-		// Activate account
-		if (strlen($this->Input->get('token')))
-		{
-			$this->activateAcount();
-			return;
 		}
 
 		if (strlen($this->memberTpl))
@@ -223,25 +191,6 @@ class ModuleCreateNewUser extends Module
 					}
 				}
 
-				// Save callback
-				if (is_array($arrData['save_callback']))
-				{
-					foreach ($arrData['save_callback'] as $callback)
-					{
-						$this->import($callback[0]);
-
-						try
-						{
-							$varValue = $this->$callback[0]->$callback[1]($varValue, $this->User);
-						}
-						catch (Exception $e)
-						{
-							$objWidget->class = 'error';
-							$objWidget->addError($e->getMessage());
-						}
-					}
-				}
-
 				if ($objWidget->hasErrors())
 				{
 					$doNotSubmit = true;
@@ -276,6 +225,12 @@ class ModuleCreateNewUser extends Module
 			$this->Template->fields .= $strCaptcha;
 			$arrFields['captcha'] .= $strCaptcha;
 		}
+		
+		// Store all values in the session
+		foreach (array_keys($_POST) as $key)
+		{
+			$_SESSION['FORM_DATA'][$key] = $this->allowTags ? $this->Input->postHtml($key, true) : $this->Input->post($key, true);
+		}			
 
 		$this->Template->rowLast = 'row_' . ++$i . ((($i % 2) == 0) ? ' even' : ' odd');
 		$this->Template->enctype = $hasUpload ? 'multipart/form-data' : 'application/x-www-form-urlencoded';
@@ -304,12 +259,6 @@ class ModuleCreateNewUser extends Module
 		$this->Template->slabel = specialchars($this->cnu_submit);
 		$this->Template->action = $this->getIndexFreeRequest();
 		
-		// Store all values in the session
-		foreach (array_keys($_POST) as $key)
-		{
-			$_SESSION['FORM_DATA'][$key] = $this->allowTags ? $this->Input->postHtml($key, true) : $this->Input->post($key, true);
-		}	
-		
 		if (!$unique)
 		{
 			$this->jumpToOrReload($this->jumpTo);	
@@ -323,169 +272,6 @@ class ModuleCreateNewUser extends Module
 	 */
 	protected function createNewUser($arrData)
 	{
-		$arrData['tstamp'] = time();
-		$arrData['login'] = $this->cnu_allowLogin;
-		$arrData['activation'] = md5(uniqid(mt_rand(), true));
-		$arrData['dateAdded'] = $arrData['tstamp'];
-		$arrData['username'] = $arrData['email'];
-
-		// Set default groups
-		if (!array_key_exists('groups', $arrData))
-		{
-			$arrData['groups'] = $this->cnu_groups;
-		}
-
-		// Disable account
-		$arrData['disable'] = 1;
-		
-		// Set default password
-		$password = mt_rand();
-		$arrData['password'] = $password;
-
-		// Send activation e-mail
-		if ($this->cnu_activate)
-		{
-			$arrChunks = array();
-
-			$strConfirmation = $this->cnu_text;
-			preg_match_all('/##[^#]+##/i', $strConfirmation, $arrChunks);
-
-			foreach ($arrChunks[0] as $strChunk)
-			{
-				$strKey = substr($strChunk, 2, -2);
-
-				switch ($strKey)
-				{
-					case 'domain':
-						$strConfirmation = str_replace($strChunk, $this->Environment->host, $strConfirmation);
-						break;
-
-					case 'link':
-						$strConfirmation = str_replace($strChunk, $this->Environment->base . $this->Environment->request . (($GLOBALS['TL_CONFIG']['disableAlias'] || strpos($this->Environment->request, '?') !== false) ? '&' : '?') . 'token=' . $arrData['activation'], $strConfirmation);
-						break;
-            
-					default:
-						$strConfirmation = str_replace($strChunk, $arrData[$strKey], $strConfirmation);
-						break;
-				}
-			}
-
-			$objEmail = new Email();
-
-			$objEmail->from = $GLOBALS['TL_ADMIN_EMAIL'];
-			$objEmail->fromName = $GLOBALS['TL_ADMIN_NAME'];
-			$objEmail->subject = sprintf($GLOBALS['TL_LANG']['MSC']['emailSubject'], $this->Environment->host);
-			$objEmail->text = $strConfirmation;
-			$objEmail->sendTo($arrData['email']);
-		}
-
-		// Make sure newsletter is an array
-		if (isset($arrData['newsletter']) && !is_array($arrData['newsletter']))
-		{
-			$arrData['newsletter'] = array($arrData['newsletter']);
-		}
-		
-		// Fallback to default if the class is not defined
-		if (!$this->classFileExists($strClass))
-		{
-			$strClass = 'FormCreateNewUser';
-		}
-
-    	// Password not clear to DB
-    	$strSalt = substr(md5(uniqid('', true)), 0, 23); 
-    	$arrData['password'] = sha1($strSalt . $password).':'.$strSalt;
-
-		// Create user
-		$objNewUser = $this->Database->prepare("INSERT INTO tl_member %s")->set($arrData)->execute();
-		$insertId = $objNewUser->insertId;
-
-		// Assign home directory
-		if ($this->cnu_assignDir && is_dir(TL_ROOT . '/' . $this->cnu_homeDir))
-		{
-			$this->import('Files');
-			$strUserDir = strlen($arrData['username']) ? $arrData['username'] : 'user_' . $insertId;
-
-			// Add the user ID if the directory exists
-			if (is_dir(TL_ROOT . '/' . $this->cnu_homeDir . '/' . $strUserDir))
-			{
-				$strUserDir .= '_' . $insertId;
-			}
-
-			new Folder($this->cnu_homeDir . '/' . $strUserDir);
-
-			$this->Database->prepare("UPDATE tl_member SET homeDir=?, assignDir=1 WHERE id=?")
-						   ->execute($this->cnu_homeDir . '/' . $strUserDir, $insertId);
-		}
-
-		// Inform admin if no activation link is sent
-		if (!$this->cnu_activate)
-		{
-			$this->sendAdminNotification($insertId, $arrData);
-		}
-
-		$this->jumpToOrReload($this->jumpTo);
-	}
-
-
-	/**
-	 * Activate an account
-	 */
-	protected function activateAcount()
-	{
-		$this->strTemplate = 'mod_message';
-		$this->Template = new FrontendTemplate($this->strTemplate);
-
-		// Check the token
-		$objMember = $this->Database->prepare("SELECT * FROM tl_member WHERE activation=?")
-									->limit(1)
-									->execute($this->Input->get('token'));
-
-		if ($objMember->numRows < 1)
-		{
-			$this->Template->type = 'error';
-			$this->Template->message = $GLOBALS['TL_LANG']['MSC']['accountError'];
-
-			return;
-		}
-
-		// Update account
-		$this->Database->prepare("UPDATE tl_member SET disable='', activation='' WHERE id=?")
-					   ->execute($objMember->id);
-
-		$arrData = array();
-
-		// Get editable fields
-		foreach ($this->editable as $key)
-		{
-			$arrData[$key] = $objMember->$key;
-		}
-
-		// Add login details
-		$arrData['groups'] = $objMember->groups;
-		$arrData['login'] = $objMember->login;
-		$arrData['disable'] = '';
-
-		// Log activity
-		$this->log('User account ID ' . $objMember->id . ' (' . $objMember->email . ') has been activated', 'ModuleRegistration activateAccount()', TL_ACCESS);
-
-		// Redirect to jumpTo page
-		if (strlen($this->cnu_jumpTo))
-		{
-			$objNextPage = $this->Database->prepare("SELECT id, alias FROM tl_page WHERE id=?")
-										  ->limit(1)
-										  ->execute($this->cnu_jumpTo);
-
-			if ($objNextPage->numRows)
-			{
-				$this->redirect($this->generateFrontendUrl($objNextPage->fetchAssoc()));
-			}
-		}
-
-		// Confirm activation
-		$this->Template->type = 'confirm';
-		$this->Template->message = $GLOBALS['TL_LANG']['MSC']['accountActivated'];
-	}
-
 
 	/**
 	 * Send an admin notification e-mail
@@ -493,38 +279,6 @@ class ModuleCreateNewUser extends Module
 	 * @param array
 	 */
 	protected function sendAdminNotification($intId, $arrData)
-	{
-		$objEmail = new Email();
-
-		$objEmail->from = $GLOBALS['TL_ADMIN_EMAIL'];
-		$objEmail->fromName = $GLOBALS['TL_ADMIN_NAME'];
-		$objEmail->subject = sprintf($GLOBALS['TL_LANG']['MSC']['adminSubject'], $this->Environment->host);
-
-		$strData = "\n\n";
-
-		// Add user details
-		foreach ($arrData as $k=>$v)
-		{
-			if ($k == 'password' || $k == 'tstamp' || $k == 'activation')
-			{
-				continue;
-			}
-
-			$v = deserialize($v);
-
-			if ($k == 'dateOfBirth' && strlen($v))
-			{
-				$v = $this->parseDate($GLOBALS['TL_CONFIG']['dateFormat'], $v);
-			}
-
-			$strData .= $GLOBALS['TL_LANG']['tl_member'][$k][0] . ': ' . (is_array($v) ? implode(', ', $v) : $v) . "\n";
-		}
-
-		$objEmail->text = sprintf($GLOBALS['TL_LANG']['MSC']['adminText'], $intId, $strData . "\n") . "\n";
-		$objEmail->sendTo($GLOBALS['TL_ADMIN_EMAIL']);
-
-		$this->log('A new user (ID ' . $intId . ') has registered on the website', 'ModuleRegistration sendAdminNotification()', TL_ACCESS);
-	}
-}
+	{}
 
 ?>
