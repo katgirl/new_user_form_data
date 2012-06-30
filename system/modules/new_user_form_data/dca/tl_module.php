@@ -160,7 +160,5 @@ class tl_module_CreateNewUser extends Backend
 		return $varValue;
 	}
 	
-	
 }
 
-?>
